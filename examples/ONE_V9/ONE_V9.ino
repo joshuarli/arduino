@@ -17,6 +17,15 @@ The codes needs the following libraries installed:
 "Arduino-SHT" by Johannes Winkelmann Version 1.2.2
 "Adafruit NeoPixel" by Adafruit Version 1.11.0
 
+$ arduino-cli board list
+$ arduino-cli core install esp32:esp32
+$ arduino-cli lib install 'U8g2'@2.32.15 'Sensirion I2C SGP41'@1.0.0 'Sensirion Gas Index Algorithm'@3.2.2 'PMS Library'@1.1.0 'S8_UART'@1.0.1 'Arduino-SHT'@1.2.2 'Adafruit NeoPixel'@1.11.0
+$ arduino-cli compile -e --fqbn esp32:esp32:lolin_c3_mini examples/ONE_V9/
+
+esp32:esp32:wifiduino32c3 doesn't work because core esp32:esp32 v2.0.11 doesn't have Serial0, Serial1
+
+$ arduino-cli upload examples/ONE_V9 --verify --fqbn esp32:esp32:lolin_c3_mini -p /dev/cu.usbmodem101
+
 Configuration:
 Please set in the code below the configuration parameters.
 
@@ -39,7 +48,7 @@ CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
 
 #include <HTTPClient.h>
 
-#include <WiFiManager.h>
+// #include <WiFiManager.h>
 
 #include <Adafruit_NeoPixel.h>
 
@@ -55,7 +64,9 @@ CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
 
 #include <U8g2lib.h>
 
-#define DEBUG true
+#include "esp32-hal.h"
+
+#define DEBUG false
 
 #define I2C_SDA 7
 #define I2C_SCL 6
@@ -99,9 +110,6 @@ boolean displayTop = true;
 // use RGB LED Bar
 boolean useRGBledBar = true;
 
-// set to true if you want to connect to wifi. You have 60 seconds to connect. Then it will go into an offline mode.
-boolean connectWIFI = true;
-
 int loopCount = 0;
 
 unsigned long currentMillis = 0;
@@ -140,11 +148,11 @@ unsigned long pressedTime = 0;
 unsigned long releasedTime = 0;
 
 void setup() {
-  if (DEBUG) {
+  /*if (DEBUG) {
     Serial.begin(115200);
     // see https://github.com/espressif/arduino-esp32/issues/6983
     Serial.setTxTimeoutMs(0); // <<<====== solves the delay issue
-  }
+  }*/
 
   Wire.begin(I2C_SDA, I2C_SCL);
   pixels.begin();
@@ -154,7 +162,7 @@ void setup() {
   Serial0.begin(9600);
   u8g2.begin();
 
-  updateOLED2("Warming Up", "Serial Number:", String(getNormalizedMac()));
+  updateOLED2("Warming Up", "", "");
   sgp41.begin(Wire);
   delay(300);
 
@@ -162,9 +170,13 @@ void setup() {
   //sht.setAccuracy(SHTSensor::SHT_ACCURACY_MEDIUM);
   delay(300);
 
+  // note: removing this doesn't disable the watchdog
   //init Watchdog
-  pinMode(2, OUTPUT);
-  digitalWrite(2, LOW);
+  // pinMode(2, OUTPUT);
+  // digitalWrite(2, LOW);
+
+  disableCore0WDT();
+  disableLoopWDT();
 
   sensor_S8 = new S8_UART(Serial1);
 
@@ -178,8 +190,9 @@ void setup() {
   if (buttonConfig > 7) buttonConfig = 0;
   delay(400);
   setConfig();
-  Serial.println("buttonConfig: " + String(buttonConfig));
+  //Serial.println("buttonConfig: " + String(buttonConfig));
 
+  /*
   updateOLED2("Press Button", "for LED test &", "offline mode");
   delay(2000);
   currentState = digitalRead(9);
@@ -187,6 +200,7 @@ void setup() {
     ledTest();
     return;
   }
+  */
 
   updateOLED2("Press Button", "Now for", "Config Menu");
   delay(2000);
@@ -199,24 +213,29 @@ void setup() {
     inConf();
   }
 
-   if (connectWIFI) connectToWifi();
-    if (WiFi.status() == WL_CONNECTED) {
-      sendPing();
-      Serial.println(F("WiFi connected!"));
-      Serial.println("IP address: ");
-      Serial.println(WiFi.localIP());
-    }
-  updateOLED2("Warming Up", "Serial Number:", String(getNormalizedMac()));
+  /*
+  connectToWifi();
+  if (WiFi.status() == WL_CONNECTED) {
+    sendPing();
+    Serial.println(F("WiFi connected!"));
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+  */
 }
 
 void loop() {
   currentMillis = millis();
   updateTVOC();
-  updateOLED();
   updateCo2();
   updatePm();
   updateTempHum();
-  sendToServer();
+  if (currentMillis - previousOled >= oledInterval) {
+    previousOled += oledInterval;
+    updateOLED3();
+    // setRGBledCO2color(Co2);
+  }
+  // sendToServer();
 }
 
 void updateTVOC() {
@@ -296,32 +315,6 @@ void updateTempHum() {
       temp = -10001;
       hum = -10001;
     }
-  }
-}
-
-void updateOLED() {
-  if (currentMillis - previousOled >= oledInterval) {
-    previousOled += oledInterval;
-
-    String ln3;
-    String ln1;
-
-    if (inUSAQI) {
-      ln1 = "AQI:" + String(PM_TO_AQI_US(pm25)) + " CO2:" + String(Co2);
-    } else {
-      ln1 = "PM:" + String(pm25) + " CO2:" + String(Co2);
-    }
-
-    String ln2 = "TVOC:" + String(TVOC) + " NOX:" + String(NOX);
-
-    if (inF) {
-      ln3 = "F:" + String((temp * 9 / 5) + 32) + " H:" + String(hum) + "%";
-    } else {
-      ln3 = "C:" + String(temp) + " H:" + String(hum) + "%";
-    }
-    //updateOLED2(ln1, ln2, ln3);
-    updateOLED3();
-    setRGBledCO2color(Co2);
   }
 }
 
@@ -446,7 +439,7 @@ void updateOLED3() {
     if (inF) {
       if (temp > -10001) {
         float tempF = (temp * 9 / 5) + 32;
-        sprintf(buf, "%.1f°F", tempF);
+        sprintf(buf, "%.1f°F %lu", tempF, currentMillis/1000);
       } else {
         sprintf(buf, "-°F");
       }
@@ -584,6 +577,7 @@ void resetWatchdog() {
 }
 
 // Wifi Manager
+/*
 void connectToWifi() {
   WiFiManager wifiManager;
   //WiFi.disconnect(); //to delete previous saved hotspot
@@ -596,6 +590,7 @@ void connectToWifi() {
   }
 
 }
+*/
 
 void debug(String msg) {
   if (DEBUG)
