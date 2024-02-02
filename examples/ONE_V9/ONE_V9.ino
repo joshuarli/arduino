@@ -64,8 +64,6 @@ CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
 
 #include <U8g2lib.h>
 
-#include "esp32-hal.h"
-
 #define DEBUG false
 
 #define I2C_SDA 7
@@ -170,13 +168,9 @@ void setup() {
   //sht.setAccuracy(SHTSensor::SHT_ACCURACY_MEDIUM);
   delay(300);
 
-  // note: removing this doesn't disable the watchdog
   //init Watchdog
-  // pinMode(2, OUTPUT);
-  // digitalWrite(2, LOW);
-
-  disableCore0WDT();
-  disableLoopWDT();
+  pinMode(2, OUTPUT);
+  digitalWrite(2, LOW);
 
   sensor_S8 = new S8_UART(Serial1);
 
@@ -233,6 +227,7 @@ void loop() {
   if (currentMillis - previousOled >= oledInterval) {
     previousOled += oledInterval;
     updateOLED3();
+    resetWatchdog();
     // setRGBledCO2color(Co2);
   }
   // sendToServer();
